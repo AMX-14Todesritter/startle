@@ -189,7 +189,7 @@ namespace starhomoplasy {
             const std::vector<int> &edge_indices,
             bool greedy
     ) {
-        double best_score = t[0].data.parsimony_score; // i.e. best_score = \infty
+        double best_score = 1E9; // i.e. best_score = \infty
         std::optional<std::tuple<int, int, int, int>> best_move;
         for (int idx : edge_indices) {
             const auto& [u, v] = indexed_edges.at(idx);
@@ -229,7 +229,6 @@ namespace starhomoplasy {
 
                     undo_nni(t, u, w, v, z);
                     invalidate(t, 0, v);
-
                 }
             }
         }
@@ -258,11 +257,16 @@ namespace starhomoplasy {
             
         std::shuffle(random_indices.begin(), random_indices.end(), gen);
 
+        small_parsimony(t, mutation_priors, M, 0, 0);
         double current_score = t[0].data.parsimony_score;
+
+        invalidate(t, 0);
         int iterations = 0;
         for (; true; iterations++) {
             auto best_move = greedy_nni(t, mutation_priors, M, index_to_edges, random_indices, greedy);
-            if (!best_move) break;
+            if (!best_move) {
+                break;
+            }
 
             auto [u, w, v, z] = *best_move;
             nni(t, u, w, v, z);

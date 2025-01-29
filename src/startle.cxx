@@ -266,8 +266,8 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     arbitrarily_resolve_polytomies(tree);
 
     console->info("solving large parsimony problem");
-    std::random_device rd;
-    std::ranlux48_base gen(rd());
+    std::seed_seq seed{large.get<int>("random-seed")};
+    std::ranlux48_base gen(seed);
 
     /*
       Candidate tree set is obtained by randomly
@@ -276,7 +276,7 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     std::vector<digraph<star_homoplasy_data>> candidate_trees;
     unsigned int num_candidate_trees = large.get<unsigned int>("--num-candidates");
     for (int i = 0; i < num_candidate_trees; i++) {
-        float aggression = 0.2 * i;
+        float aggression = 1.5;
         digraph<star_homoplasy_data> t = stochastic_nni(tree, gen, aggression);
         small_parsimony(t, mutation_priors, M, 0, 0);
         candidate_trees.push_back(t);
@@ -297,8 +297,8 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     for (unsigned int i = 0; i < num_threads; i++) {
         threads.push_back(std::thread([&]() {
             int thread_id = i;
-            std::random_device rd;
-            std::ranlux48_base gen(rd());
+            std::seed_seq seed{large.get<int>("random-seed") + thread_id};
+            std::ranlux48_base gen(seed);
 
             while (counter < large.get<size_t>("-i")) {
                 int current_iteration = iteration.load();
@@ -341,7 +341,8 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
                 }
 
                 std::uniform_real_distribution<double> aggression_distrib(0, large.get<double>("-a"));
-                candidate_tree = stochastic_nni(candidate_tree, gen, aggression_distrib(gen)); // seems to be a NO OP
+
+                candidate_tree = stochastic_nni(candidate_tree, gen, aggression_distrib(gen));
 
                 digraph<star_homoplasy_data> updated_tree = hill_climb(candidate_tree, mutation_priors, M, gen, large.get<bool>("-g"));
                 spdlog::info("thread ID {}: updated tree score is {}", thread_id, updated_tree[0].data.parsimony_score);
@@ -455,7 +456,7 @@ int main(int argc, char *argv[])
 
     large.add_argument("-a", "--aggression")
           .help("aggression of the stochastic hill climbing algorithm")
-          .default_value(0.4)
+          .default_value(0.3)
           .scan<'f', double>();
 
     large.add_argument("-r", "--random-seed") // TODO: get working
