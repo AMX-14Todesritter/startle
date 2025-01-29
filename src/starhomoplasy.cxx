@@ -72,7 +72,7 @@ namespace starhomoplasy {
             return;
         }
 
-        const auto successors = tree.successors(vertex);
+        const auto& successors = tree.successors(vertex);
 
         for (const auto &u : successors) {
             small_parsimony(tree, mutation_priors, M, u, root);
@@ -80,46 +80,59 @@ namespace starhomoplasy {
 
         std::vector<int> character_states(tree[vertex].data.character_states.size(), 0);
 
-        if (vertex != root) {
-            for (size_t j = 0; j < tree[vertex].data.character_states.size(); j++) {
-                int parent_state = -1;
-                bool zero_parent_state = false;
-                for (const auto &u : successors) {
-                    if (tree[u].data.character_states[j] == 0) {
-                        zero_parent_state = true;
-                        break;
+        for (size_t j = 0; j < tree[vertex].data.character_states.size(); j++) {
+            int parent_state = -1;
+            bool zero_parent_state = false;
+            for (const auto &u : successors) {
+                int state = tree[u].data.character_states[j];
+                if (state == 0) {
+                    zero_parent_state = true;
+                    break;
+                } 
+
+                if (state != -1) {
+                    if (parent_state == -1) {
+                        parent_state = state;
+                        continue;
                     } 
 
-                    if (tree[u].data.character_states[j] != -1) {
-                        if (parent_state == -1) {
-                            parent_state = tree[u].data.character_states[j];
-                            continue;
-                        } 
-
-                        if (parent_state != tree[u].data.character_states[j]) {
-                            zero_parent_state = true;
-                            break;
-                        }
+                    if (parent_state != state) {
+                        zero_parent_state = true;
+                        break;
                     }
                 }
+            }
 
-                if (!zero_parent_state) {
-                    character_states[j] = parent_state;
-                }
+            if (!zero_parent_state) {
+                character_states[j] = parent_state;
             }
         }
 
         double parsimony_score = 0;
         for (const auto &u : successors) {
             for (size_t j = 0; j < tree[vertex].data.character_states.size(); j++) {
-                if (tree[u].data.character_states[j] != -1 && tree[u].data.character_states[j] != character_states[j]) {
-                    parsimony_score += mutation_priors.at(M.characters[j]).at(tree[u].data.character_states[j]);
+                int state = tree[u].data.character_states[j];
+                if (state != -1 && state != character_states[j]) {
+                    parsimony_score += mutation_priors.at(M.characters[j]).at(state);
                 }
             }
         }
 
         for (const auto &u : successors) {
             parsimony_score += tree[u].data.parsimony_score;
+        }
+
+        if (vertex == root) {
+            for (size_t j = 0; j < tree[vertex].data.character_states.size(); j++) {
+                int state = character_states[j];
+                if (state == -1) {
+                    character_states[j] = 0;
+                }
+
+                if (state != 0) {
+                    parsimony_score += mutation_priors.at(M.characters[j]).at(state);
+                }
+            }
         }
 
         tree[vertex].data.character_states = character_states;

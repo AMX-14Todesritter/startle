@@ -80,7 +80,6 @@ namespace starhomoplasy {
         std::ranlux48_base& gen, 
         bool greedy
     );
-
 }
 
 #endif // STARHOMOPLASY_HPP
