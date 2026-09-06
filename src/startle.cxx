@@ -25,6 +25,9 @@
 #include <optional>
 #include <stack>
 #include <tuple>
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 using json = nlohmann::json;
 using namespace starhomoplasy;
@@ -293,16 +296,29 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     std::vector<std::thread> threads;
 
     json progress_information;
-    std::atomic<size_t> counter = 0, iteration = 0;
+    const size_t patience = large.get<size_t>("-i");
+    const size_t max_attempts = large.get<size_t>("--max-attempts");
+    std::atomic<size_t> counter = 0;
+    std::atomic<size_t> iteration = 0;
+    std::atomic<size_t> completed_attempts = 0;
     for (unsigned int i = 0; i < num_threads; i++) {
-        threads.push_back(std::thread([&]() {
-            int thread_id = i;
+        threads.push_back(std::thread([&, thread_id = i]() {
             std::seed_seq seed{large.get<int>("random-seed") + thread_id};
             std::ranlux48_base gen(seed);
 
-            while (counter < large.get<size_t>("-i")) {
-                int current_iteration = iteration.load();
-                iteration++;
+            while (true) {
+                size_t current_iteration;
+                if (max_attempts > 0) {
+                    current_iteration = iteration.fetch_add(1);
+                    if (current_iteration >= max_attempts) {
+                        break;
+                    }
+                } else {
+                    if (counter.load() >= patience) {
+                        break;
+                    }
+                    current_iteration = iteration.fetch_add(1);
+                }
 
                 std::vector<double> scores;
                 {
@@ -348,7 +364,7 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
                 spdlog::info("thread ID {}: updated tree score is {}", thread_id, updated_tree[0].data.parsimony_score);
 
                 std::lock_guard<std::mutex> lock(progress_mutex);
-                counter++;
+                completed_attempts++;
                 auto maximum_it = std::max_element(
                         candidate_trees.begin(), candidate_trees.end(), 
                         [](const digraph<star_homoplasy_data> &a, const digraph<star_homoplasy_data> &b) {
@@ -358,9 +374,15 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
                 if (updated_tree[0].data.parsimony_score < (*maximum_it)[0].data.parsimony_score) {
                     *maximum_it = updated_tree;
                     spdlog::info("thread ID {}: updated candidate tree set.", thread_id);
-                    counter = 0;
+                    if (max_attempts == 0) {
+                        counter = 0;
+                    }
                     continue;
-                } 
+                }
+
+                if (max_attempts == 0) {
+                    counter++;
+                }
             }
         }));
     }
@@ -368,6 +390,8 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     for (auto& thread : threads) {
         thread.join();
     }
+
+    spdlog::info("completed {} search attempts", completed_attempts.load());
 
     for (auto& candidate_tree : candidate_trees) {
         small_parsimony(candidate_tree, mutation_priors, M, 0, 0);
@@ -450,8 +474,13 @@ int main(int argc, char *argv[])
           .required();
 
     large.add_argument("-i", "--iterations")
-          .help("number of iterations to use in the stochastic hill climbing algorithm")
+          .help("number of consecutive non-improving attempts before stopping")
           .default_value((size_t) 400)
+          .scan<'u', size_t>();
+
+    large.add_argument("--max-attempts")
+          .help("fixed total number of search attempts across all threads; 0 uses --iterations")
+          .default_value((size_t) 0)
           .scan<'u', size_t>();
 
     large.add_argument("-a", "--aggression")
