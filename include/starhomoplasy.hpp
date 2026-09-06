@@ -78,7 +78,9 @@ namespace starhomoplasy {
         const std::map<std::string, std::map<int, double>>& mutation_priors,
         const character_state_matrix& M,
         std::ranlux48_base& gen, 
-        bool greedy
+        bool greedy,
+        bool use_cuda = false,
+        bool verify_cuda = false
     );
 }
 

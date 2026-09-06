@@ -31,6 +31,12 @@ namespace starhomoplasy {
 
         size_t num_nodes() const { return parent_.size(); }
         size_t num_characters() const { return num_characters_; }
+        int root() const { return root_; }
+        const std::vector<int>& child_a() const { return child_a_; }
+        const std::vector<int>& child_b() const { return child_b_; }
+        const std::vector<int>& initial_states() const { return initial_states_; }
+        const std::vector<size_t>& prior_offsets() const { return prior_offsets_; }
+        const std::vector<double>& prior_values() const { return prior_values_; }
 
     private:
         int root_ = 0;

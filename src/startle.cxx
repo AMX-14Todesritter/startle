@@ -10,6 +10,7 @@
 #include "treeio.hpp"
 #include "starhomoplasy.hpp"
 #include "flat_parsimony.hpp"
+#include "cuda_parsimony.hpp"
 
 #include <cmath>
 #include <unordered_map>
@@ -182,7 +183,7 @@ void solve_small_parsimony(argparse::ArgumentParser small) {
 
     json output;
     output["objective_value"] = tree[0].data.parsimony_score;
-    if (small.get<bool>("--validate-flat")) {
+    if (small.get<bool>("--validate-flat") || small.get<bool>("--validate-cuda")) {
         console->info("validating flat parsimony scorer");
         const flat_tree base_flat = flat_tree::from_digraph(tree, mutation_priors, M);
         const double flat_score = base_flat.score();
@@ -194,6 +195,16 @@ void solve_small_parsimony(argparse::ArgumentParser small) {
         json candidates = json::array();
         double max_absolute_error = 0.0;
         const auto moves = enumerate_nni_moves(tree);
+        std::vector<double> cuda_scores;
+        if (small.get<bool>("--validate-cuda")) {
+            std::string reason;
+            if (!cuda_parsimony_available(&reason)) {
+                throw std::runtime_error("CUDA validation requested but unavailable: " + reason);
+            }
+            cuda_scores = cuda_score_nni_candidates(base_flat, moves);
+        }
+        double cuda_max_absolute_error = 0.0;
+        size_t candidate_index = 0;
         for (const flat_nni_move& move : moves) {
             auto reference_candidate = tree;
             nni(reference_candidate, move.u, move.w, move.v, move.z);
@@ -209,12 +220,21 @@ void solve_small_parsimony(argparse::ArgumentParser small) {
             if (absolute_error > tolerance) {
                 throw std::runtime_error("flat scorer disagrees on an NNI candidate");
             }
+            if (!cuda_scores.empty()) {
+                const double cuda_error = std::abs(reference_score - cuda_scores.at(candidate_index));
+                cuda_max_absolute_error = std::max(cuda_max_absolute_error, cuda_error);
+                if (cuda_error > tolerance) {
+                    throw std::runtime_error("CUDA scorer disagrees on an NNI candidate");
+                }
+            }
 
             candidates.push_back({
                 {"u", move.u}, {"w", move.w}, {"v", move.v}, {"z", move.z},
                 {"reference_score", reference_score},
-                {"flat_score", candidate_flat_score}
+                {"flat_score", candidate_flat_score},
+                {"cuda_score", cuda_scores.empty() ? json(nullptr) : json(cuda_scores.at(candidate_index))}
             });
+            ++candidate_index;
         }
 
         output["flat_validation"] = {
@@ -223,6 +243,14 @@ void solve_small_parsimony(argparse::ArgumentParser small) {
             {"max_absolute_error", max_absolute_error},
             {"candidates", candidates}
         };
+        if (!cuda_scores.empty()) {
+            output["cuda_validation"] = {
+                {"candidate_count", cuda_scores.size()},
+                {"max_absolute_error", cuda_max_absolute_error}
+            };
+            console->info("validated CUDA scores for {} candidates; maximum absolute error = {}",
+                          cuda_scores.size(), cuda_max_absolute_error);
+        }
         console->info("validated {} NNI candidates; maximum absolute error = {}",
                       candidates.size(), max_absolute_error);
     }
@@ -314,6 +342,18 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     arbitrarily_resolve_polytomies(tree);
 
     console->info("solving large parsimony problem");
+    const bool use_cuda = large.get<bool>("--cuda");
+    const bool verify_cuda = large.get<bool>("--cuda-verify");
+    if (verify_cuda && !use_cuda) {
+        throw std::runtime_error("--cuda-verify requires --cuda");
+    }
+    if (use_cuda) {
+        std::string reason;
+        if (!cuda_parsimony_available(&reason)) {
+            throw std::runtime_error("CUDA search requested but unavailable: " + reason);
+        }
+        console->info("using CUDA batch scoring for full NNI neighborhoods");
+    }
     std::seed_seq seed{large.get<int>("random-seed")};
     std::ranlux48_base gen(seed);
 
@@ -346,6 +386,7 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     std::atomic<size_t> counter = 0;
     std::atomic<size_t> iteration = 0;
     std::atomic<size_t> completed_attempts = 0;
+    std::vector<size_t> thread_attempts(num_threads, 0);
     for (unsigned int i = 0; i < num_threads; i++) {
         threads.push_back(std::thread([&, thread_id = i]() {
             std::seed_seq seed{large.get<int>("random-seed") + thread_id};
@@ -405,11 +446,14 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
 
                 candidate_tree = stochastic_nni(candidate_tree, gen, aggression_distrib(gen));
 
-                digraph<star_homoplasy_data> updated_tree = hill_climb(candidate_tree, mutation_priors, M, gen, large.get<bool>("-g"));
+                digraph<star_homoplasy_data> updated_tree = hill_climb(
+                    candidate_tree, mutation_priors, M, gen, large.get<bool>("-g"),
+                    use_cuda, verify_cuda);
                 spdlog::info("thread ID {}: updated tree score is {}", thread_id, updated_tree[0].data.parsimony_score);
 
                 std::lock_guard<std::mutex> lock(progress_mutex);
                 completed_attempts++;
+                thread_attempts[thread_id]++;
                 auto maximum_it = std::max_element(
                         candidate_trees.begin(), candidate_trees.end(), 
                         [](const digraph<star_homoplasy_data> &a, const digraph<star_homoplasy_data> &b) {
@@ -437,6 +481,9 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     }
 
     spdlog::info("completed {} search attempts", completed_attempts.load());
+    for (unsigned int i = 0; i < num_threads; ++i) {
+        spdlog::info("thread {} completed {} attempts", i, thread_attempts[i]);
+    }
 
     std::sort(progress_information.begin(), progress_information.end(),
               [](const json& a, const json& b) {
@@ -515,6 +562,11 @@ int main(int argc, char *argv[])
             .default_value(false)
             .implicit_value(true);
 
+    small.add_argument("--validate-cuda")
+            .help("compare the CUDA batch scorer with the recursive scorer for every NNI candidate")
+            .default_value(false)
+            .implicit_value(true);
+
     large.add_argument("character_matrix")
            .help("CSV file containing the character-state matrix");
 
@@ -567,6 +619,16 @@ int main(int argc, char *argv[])
           .help("number of candidate trees to use in the stochastic hill climbing algorithm")
           .default_value(10U)
           .scan<'u', unsigned int>();
+
+    large.add_argument("--cuda")
+          .help("score each full NNI neighborhood as a CUDA batch")
+          .default_value(false)
+          .implicit_value(true);
+
+    large.add_argument("--cuda-verify")
+          .help("compare every CUDA neighborhood score with a full CPU recomputation")
+          .default_value(false)
+          .implicit_value(true);
 
     program.add_subparser(small);
     program.add_subparser(large);

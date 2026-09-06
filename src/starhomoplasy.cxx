@@ -1,11 +1,15 @@
 #include "starhomoplasy.hpp"
+#include "flat_parsimony.hpp"
+#include "cuda_parsimony.hpp"
 #include <spdlog/spdlog.h>
 #include <stack>
 #include <algorithm>
+#include <cmath>
 #include <random>
 
 namespace starhomoplasy {
     namespace {
+        constexpr double score_tolerance = 1e-9;
         int rand_int(std::ranlux48_base& gen, int a, int b) {
             std::uniform_int_distribution<int> distrib(a, b);
             return distrib(gen);
@@ -216,7 +220,7 @@ namespace starhomoplasy {
                     small_parsimony(t, mutation_priors, M, 0, 0);
 
                     double score = t[0].data.parsimony_score;
-                    if (score < best_score) {
+                    if (score < best_score - score_tolerance) {
                         best_score = score;
                         best_move = std::make_tuple(u, w, v, z);
 
@@ -236,12 +240,86 @@ namespace starhomoplasy {
         return best_move;
     }
 
+    std::optional<std::tuple<int, int, int, int>> cuda_greedy_nni(
+            digraph<star_homoplasy_data>& t,
+            const std::map<std::string, std::map<int, double>>& mutation_priors,
+            const character_state_matrix& M,
+            const std::map<int, std::pair<int, int>>& indexed_edges,
+            const std::vector<int>& edge_indices,
+            bool greedy,
+            bool verify_cuda) {
+        std::vector<flat_nni_move> moves;
+        for (int idx : edge_indices) {
+            const auto [u,v] = indexed_edges.at(idx);
+            if (t.successors(v).empty()) continue;
+            for (int w : t.successors(u)) {
+                if (w == v) continue;
+                for (int z : t.successors(v)) moves.push_back({u,w,v,z});
+            }
+        }
+        if (moves.empty()) return std::nullopt;
+        if (greedy) {
+            const auto& m=moves.front();
+            return std::make_tuple(m.u,m.w,m.v,m.z);
+        }
+        const flat_tree base=flat_tree::from_digraph(t,mutation_priors,M);
+        const auto scores=cuda_score_nni_candidates(base,moves);
+        if (verify_cuda) {
+            constexpr double tolerance=1e-9;
+            auto incremental=t;
+            for (size_t i=0; i<moves.size(); ++i) {
+                auto candidate=t;
+                const auto& m=moves[i];
+                nni(candidate,m.u,m.w,m.v,m.z);
+                invalidate(candidate,0);
+                small_parsimony(candidate,mutation_priors,M,0,0);
+                const double cpu_score=candidate[0].data.parsimony_score;
+                const double error=std::abs(cpu_score-scores[i]);
+                if (error > tolerance) {
+                    throw std::runtime_error(
+                        "CUDA neighborhood mismatch at candidate " + std::to_string(i) +
+                        " move=(" + std::to_string(m.u) + "," + std::to_string(m.w) + "," +
+                        std::to_string(m.v) + "," + std::to_string(m.z) + ") CPU=" +
+                        std::to_string(cpu_score) + " CUDA=" + std::to_string(scores[i]) +
+                        " error=" + std::to_string(error));
+                }
+                nni(incremental,m.u,m.w,m.v,m.z);
+                invalidate(incremental,0,m.v);
+                small_parsimony(incremental,mutation_priors,M,0,0);
+                const double incremental_score=incremental[0].data.parsimony_score;
+                if (std::abs(cpu_score-incremental_score) > tolerance) {
+                    throw std::runtime_error(
+                        "CPU incremental-cache mismatch at candidate " + std::to_string(i) +
+                        " move=(" + std::to_string(m.u) + "," + std::to_string(m.w) + "," +
+                        std::to_string(m.v) + "," + std::to_string(m.z) + ") full=" +
+                        std::to_string(cpu_score) + " incremental=" +
+                        std::to_string(incremental_score));
+                }
+                undo_nni(incremental,m.u,m.w,m.v,m.z);
+                invalidate(incremental,0,m.v);
+            }
+        }
+        constexpr double selection_tolerance=score_tolerance;
+        const double gpu_min=*std::min_element(scores.begin(),scores.end());
+        size_t best_index=0;
+        for (size_t i=0; i<scores.size(); ++i) {
+            if (scores[i] <= gpu_min+selection_tolerance) {
+                best_index=i;
+                break;
+            }
+        }
+        const auto& m=moves.at(best_index);
+        return std::make_tuple(m.u,m.w,m.v,m.z);
+    }
+
     digraph<star_homoplasy_data> hill_climb(
         digraph<star_homoplasy_data> t, 
         const std::map<std::string, std::map<int, double>>& mutation_priors,
         const character_state_matrix& M,
         std::ranlux48_base& gen, 
-        bool greedy
+        bool greedy,
+        bool use_cuda,
+        bool verify_cuda
     ) {
         std::map<int, std::pair<int, int>> index_to_edges;
         std::map<std::pair<int, int>, int> edges_to_index;
@@ -263,7 +341,9 @@ namespace starhomoplasy {
         invalidate(t, 0);
         int iterations = 0;
         for (; true; iterations++) {
-            auto best_move = greedy_nni(t, mutation_priors, M, index_to_edges, random_indices, greedy);
+            auto best_move = use_cuda
+                ? cuda_greedy_nni(t, mutation_priors, M, index_to_edges, random_indices, greedy, verify_cuda)
+                : greedy_nni(t, mutation_priors, M, index_to_edges, random_indices, greedy);
             if (!best_move) {
                 break;
             }

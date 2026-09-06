@@ -3,7 +3,17 @@ configure_file(
     "${startle_SOURCE_DIR}/include/startle.hpp"
 )
 
-add_executable(startle startle.cxx treeio.cxx starhomoplasy.cxx flat_parsimony.cxx)
+set(STARTLE_SOURCES startle.cxx treeio.cxx starhomoplasy.cxx flat_parsimony.cxx)
+if(STARTLE_ENABLE_CUDA)
+  list(APPEND STARTLE_SOURCES cuda_parsimony.cu)
+else()
+  list(APPEND STARTLE_SOURCES cuda_parsimony_stub.cxx)
+endif()
+add_executable(startle ${STARTLE_SOURCES})
+if(STARTLE_ENABLE_CUDA)
+  target_compile_definitions(startle PRIVATE STARTLE_ENABLE_CUDA=1)
+  set_target_properties(startle PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED YES)
+endif()
 
 # add libraries
 target_link_libraries(startle PRIVATE nlohmann_json::nlohmann_json)

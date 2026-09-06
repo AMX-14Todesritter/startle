@@ -11,7 +11,11 @@ set(CMAKE_CXX_FLAGS "-Wall -Wextra -Wno-unused-parameter")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -pg --coverage")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
-project(startle VERSION 1.0)
+project(startle VERSION 1.0 LANGUAGES CXX)
+option(STARTLE_ENABLE_CUDA "Build CUDA batch scorer" OFF)
+if(STARTLE_ENABLE_CUDA)
+  enable_language(CUDA)
+endif()
 
 add_subdirectory(src/)
 
