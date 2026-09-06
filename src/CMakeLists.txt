@@ -3,7 +3,7 @@ configure_file(
     "${startle_SOURCE_DIR}/include/startle.hpp"
 )
 
-add_executable(startle startle.cxx treeio.cxx starhomoplasy.cxx)
+add_executable(startle startle.cxx treeio.cxx starhomoplasy.cxx flat_parsimony.cxx)
 
 # add libraries
 target_link_libraries(startle PRIVATE nlohmann_json::nlohmann_json)

@@ -9,6 +9,7 @@
 #include "digraph.hpp"
 #include "treeio.hpp"
 #include "starhomoplasy.hpp"
+#include "flat_parsimony.hpp"
 
 #include <cmath>
 #include <unordered_map>
@@ -180,7 +181,51 @@ void solve_small_parsimony(argparse::ArgumentParser small) {
     console->info("small parsimony score = {}", tree[0].data.parsimony_score);
 
     json output;
-    output["objective_value"] = 0;
+    output["objective_value"] = tree[0].data.parsimony_score;
+    if (small.get<bool>("--validate-flat")) {
+        console->info("validating flat parsimony scorer");
+        const flat_tree base_flat = flat_tree::from_digraph(tree, mutation_priors, M);
+        const double flat_score = base_flat.score();
+        constexpr double tolerance = 1e-9;
+        if (std::abs(flat_score - tree[0].data.parsimony_score) > tolerance) {
+            throw std::runtime_error("flat scorer disagrees on the input tree");
+        }
+
+        json candidates = json::array();
+        double max_absolute_error = 0.0;
+        const auto moves = enumerate_nni_moves(tree);
+        for (const flat_nni_move& move : moves) {
+            auto reference_candidate = tree;
+            nni(reference_candidate, move.u, move.w, move.v, move.z);
+            invalidate(reference_candidate, 0);
+            small_parsimony(reference_candidate, mutation_priors, M, 0, 0);
+            const double reference_score = reference_candidate[0].data.parsimony_score;
+
+            auto flat_candidate = base_flat;
+            flat_candidate.apply_nni(move);
+            const double candidate_flat_score = flat_candidate.score();
+            const double absolute_error = std::abs(reference_score - candidate_flat_score);
+            max_absolute_error = std::max(max_absolute_error, absolute_error);
+            if (absolute_error > tolerance) {
+                throw std::runtime_error("flat scorer disagrees on an NNI candidate");
+            }
+
+            candidates.push_back({
+                {"u", move.u}, {"w", move.w}, {"v", move.v}, {"z", move.z},
+                {"reference_score", reference_score},
+                {"flat_score", candidate_flat_score}
+            });
+        }
+
+        output["flat_validation"] = {
+            {"base_score", flat_score},
+            {"candidate_count", candidates.size()},
+            {"max_absolute_error", max_absolute_error},
+            {"candidates", candidates}
+        };
+        console->info("validated {} NNI candidates; maximum absolute error = {}",
+                      candidates.size(), max_absolute_error);
+    }
     std::ofstream json_output(small.get<std::string>("output") + "_results.json");
     json_output << output.dump(4) << std::endl;
 
@@ -462,6 +507,11 @@ int main(int argc, char *argv[])
 
     small.add_argument("--unweighted")
             .help("use unweighted parsimony")
+            .default_value(false)
+            .implicit_value(true);
+
+    small.add_argument("--validate-flat")
+            .help("compare the recursive scorer with the flat scorer for every NNI candidate")
             .default_value(false)
             .implicit_value(true);
 

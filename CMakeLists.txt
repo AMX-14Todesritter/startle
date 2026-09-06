@@ -25,3 +25,24 @@ add_subdirectory(third-party/argparse)
 add_subdirectory(third-party/json)
 
 enable_testing()
+
+add_test(
+  NAME flat_parsimony_validation
+  COMMAND startle small
+    "${startle_SOURCE_DIR}/examples/n100_m30_d0.2_s0_p0.2_character_matrix.csv"
+    "${startle_SOURCE_DIR}/examples/n100_m30_d0.2_s0_p0.2_mutation_prior.csv"
+    "${startle_SOURCE_DIR}/examples/n100_m30_d0.2_s0_p0.2_tree.newick"
+    --output "${startle_BINARY_DIR}/flat_parsimony_validation"
+    --validate-flat
+)
+
+add_test(
+  NAME flat_parsimony_validation_unweighted
+  COMMAND startle small
+    "${startle_SOURCE_DIR}/examples/n100_m30_d0.2_s0_p0.2_character_matrix.csv"
+    "${startle_SOURCE_DIR}/examples/n100_m30_d0.2_s0_p0.2_mutation_prior.csv"
+    "${startle_SOURCE_DIR}/examples/n100_m30_d0.2_s0_p0.2_tree.newick"
+    --output "${startle_BINARY_DIR}/flat_parsimony_validation_unweighted"
+    --unweighted
+    --validate-flat
+)

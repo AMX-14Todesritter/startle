@@ -68,6 +68,22 @@ The tool contains algorithms for the star homoplasy
 SMALL and LARGE parsimony problems, available using the
 sub-commands `small` and `large`.
 
+### Flat scorer validation
+
+The `small` command can emit a deterministic validation dataset for the
+contiguous-array scorer. It compares the original recursive implementation and
+the flat implementation on the input tree and on every rooted NNI candidate.
+The command fails if any score differs by more than the validation tolerance.
+
+```
+$ startle small character_matrix.csv mutation_prior.csv tree.newick \
+          --output validation --validate-flat
+```
+
+The generated `validation_results.json` contains the sorted NNI move list and
+both scores for each move. It is intended to serve as a correctness reference
+for accelerated CPU and CUDA implementations.
+
 ### Input format
 
 Both algorithms implemented in `startle` require several files. In particular,
@@ -178,4 +194,3 @@ $ perl scripts/startle_ilp.pl -c examples/n100_m30_d0.2_s0_p0.2_character_matrix
                               -m examples/n100_m30_d0.2_s0_p0.2_mutation_prior.csv\
                               -o example_output
 ```
-
