@@ -295,7 +295,7 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     std::mutex progress_mutex;
     std::vector<std::thread> threads;
 
-    json progress_information;
+    std::vector<json> progress_information;
     const size_t patience = large.get<size_t>("-i");
     const size_t max_attempts = large.get<size_t>("--max-attempts");
     std::atomic<size_t> counter = 0;
@@ -393,6 +393,11 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
 
     spdlog::info("completed {} search attempts", completed_attempts.load());
 
+    std::sort(progress_information.begin(), progress_information.end(),
+              [](const json& a, const json& b) {
+                  return a.at("iteration").get<size_t>() < b.at("iteration").get<size_t>();
+              });
+
     for (auto& candidate_tree : candidate_trees) {
         small_parsimony(candidate_tree, mutation_priors, M, 0, 0);
     }
@@ -411,9 +416,9 @@ void solve_large_parsimony(argparse::ArgumentParser large) {
     std::ofstream newick_output(large.get<std::string>("-o") + "_tree.newick", std::ios::out);
     newick_output << newick_string;
 
-    console->info("writing newick tree to {}", large.get<std::string>("-o") + "_tree.json");
+    console->info("writing progress information to {}", large.get<std::string>("-o") + "_info.json");
     std::ofstream info_output(large.get<std::string>("-o") + "_info.json", std::ios::out);
-    info_output << progress_information.dump();
+    info_output << json(progress_information).dump();
 
     return;
 }
